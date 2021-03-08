@@ -30,6 +30,9 @@ class Softmax_Regression(Function):
 
 
 class Poisson_Regression(Function):
+    """":type
+    Log-Linear (generalized linear function)...not totally sure what that means.
+    """
     def __init__(self):
         pass
 
@@ -122,7 +125,12 @@ class Tensor(object):
 #   Any expansion to Numpy capability wrapped here
 
 class Network(object):
+    """"
+    this wil have to store the model weight and bias values
+    this will have a forward call. something like the Linear class in the minitorch.
+    """
     def __init__(self):
+
         pass
     # consider putting below functions in class also
 
@@ -164,13 +172,25 @@ def evaluate(*args):
     on eval(test) data:`
     evaluate for correctness. same thing as above, just additionally to a loss equation,
     record accuracy (max index vs hot v index for each class, then average the rates together)
-
-
     '''
-    # evaluation func
-    #   accuracy measure
-    #   recording
+    # instead just build a 3d array that is epoch x Y x Yhat:
+    # per training:
+    #   track an 'evaluation' array, from which produce total accuracies and confusion matrix
+    #   track total loss, in list form, indices = epoch
+    #   per epoch:
+    #      track total epoch slice of eval array
+    #      track loss figure total of epoch
+    #      per batch:
+    #          for each combination of y, yhat (argmax),
+    #               add a count to that index of a y x yhat sized array
+    #          calculate total loss or average loss, and add to epoch total
+    #          if criteria meets testing checkpoint,
+    #               then also do above for testing data as well,in a separate array/list
+    #
+    #
     pass
+
+
 
 class Pipeline(object):
     '''
@@ -199,22 +219,6 @@ class Pipeline(object):
         ouputs a list, and the bather is what batches....
 
         """
-        #
-        # def parse(f):
-        #     f = f.read()
-        #     f = f.split("\n")
-        #     for i in range(len(f)):
-        #         f[i] = f[i].split(',')
-        #         try:
-        #             for j in range(len(f[0][:-1])):
-        #                 f[i][j] = float(f[i][j])
-        #         except:
-        #             pass
-        #     return f
-        # read file
-        # for each line, add first char to y's list, and rest to features list
-        # return both lists input into the batch, curry call the shape....
-
 
 
     def cifar(self):
@@ -264,20 +268,49 @@ class Plot(object):
     2. accuracy vs epoch
     Visualize the partitioning of space....
     - achieve by calling forward on the grid of points in the plot...(arbitrary density)
+
+    this instance gets inputed the 'evaluation matricies' for testing and training data after
+    training...maybe the training function outputs it?
+
+    it also gets the loss log
     """
     def __init__(self):
         pass
+
     def curves(self):
+
         pass
+
     def spaces(self):
+        # Plotting decision regions
+        # x_min, x_max = X_train[:, 0].min() - 1, X_train[:, 0].max() + 1
+        # y_min, y_max = X_train[:, 1].min() - 1, X_train[:, 1].max() + 1
+        # xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
+        #                      np.arange(y_min, y_max, 0.1))
+        # X = np.concatenate((np.ones((xx.shape[0] * xx.shape[1], 1))
+        #                     , np.c_[xx.ravel(), yy.ravel()]), axis=1)
+        # h = hypothesis(theta, X, 2)
+        # h = h.reshape(xx.shape)
+        # plt.contourf(xx, yy, h)
+        # plt.scatter(X_train[:, 0], X_train[:, 1], c=y_train,
+        #             s=30, edgecolor='k')
+        # plt.xlabel("Marks obtained in 1st Exam")
+        # plt.ylabel("Marks obtained in 2nd Exam")
         pass
+
     def histrogram(self):
         pass
+
     def confusion(self):
         """
+        takes input of list of output-index comparisons, as well as the label list of same indexes..
+        this function counts each pair, and plots the grid of 3d data
+
+        sum up array along epoch dimension and simply do a plt.matshow, style as below.
 
         :return:
         """
+
         # labels = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
         #
         # def plot_confusion_matrix(df_confusion, title='Confusion Matrix', xlabels=labels, ylabels=labels, cmap='Blues'):
@@ -299,6 +332,7 @@ class Plot(object):
 # Testing module
 #   testing for each function
 
+#todo test the data functions
 
 
 
@@ -315,4 +349,4 @@ class Plot(object):
 # sense? Sorry if that's confusing.  Thank
 
 
-#currying is returning a function...
+#currying is returning a function..

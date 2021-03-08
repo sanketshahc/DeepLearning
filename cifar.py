@@ -70,3 +70,17 @@ image_helper(arr2d, figure, fig_subs)
 # get dictionary,
 # must check label array, create a zip,
 # iterate through pairs, add image to appropriate index in 2d array,
+
+
+cifar_labels = [
+'airplane',
+'automobile',
+'bird',
+'cat',
+'deer',
+'dog',
+'frog',
+'horse',
+'ship',
+'truck'
+]
