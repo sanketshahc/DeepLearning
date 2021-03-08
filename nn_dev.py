@@ -6,6 +6,9 @@ from matplotlib import ticker, cm
 import matplotlib.pyplot as plt
 import random
 
+
+BATCH = 10
+
 # paths to data
 # if tuples, second term is indices of file to take"
 resources = {
@@ -152,6 +155,80 @@ def cifar(path, mode="classification"):
     return X, Y, cifar_labels
 
 
+def batch(X,batch_size=BATCH,output = 1,to_standardize=True):
+    """
+    assuming input shape has examples as first dim, followed by sample shape.
+
+    the batcher is what worries about shapes...it takes output from above functions and
+    outputs the right shape....consider function currying for this....
+
+    I wonder if there's any way to make an iterator out of this....
+    essentially what is required is iterating along the data pairs, forming a 'tensor' for
+    each batch of shape (batch x output x input)
+
+    you can make a generator function to do precisely this....
+
+    input entire input matrix, indicating whether normalized or not.
+    """
+    # assert numpy
+    # slice / reshape to fit batch size...
+    features = X.shape[-1] # number features
+    batches = X.shape[0] // batch_size # number batches
+    ex = batches * batch_size # new number of examples
+    sliced_X = X[0:ex,...] # using ellipses!
+    batched_X = sliced_X.reshape(batches,batch_size,output,features)
+    for b in range(batches):
+        # i = (slice(None),) * fixed_dims + (b,)
+        batch = batched_X[b,...]
+        yield standardize(batch, mode='feature') if to_standardize else batch
+        #should be iterated on in trainer, as a generator.
+...
+
+def standardize(X, mode='feature'):
+    """
+    use a modified normalizatiown
+    (only for input data)
+    x = 2(x - min)/(max -min) -1
+
+    input X
+
+    mode
+     all: all features for all examples,
+     feature: each feature vector across all examples in input
+     batch: each feature vector across all examples in batch, per batch
+    """
+    if mode == 'all':
+        X = 2 * (X - X.min()) / (X.max() - X.min()) - 1
+        return X
+    # use feature mode with batch generator fn
+    elif mode == 'feature':
+        fixed_dims = len(X.shape) - 1
+        for f in range(X.shape[-1]):
+            # i = (slice(None),) * fixed_dims + (f,)  # sliceNone == ':'
+            i = [...,f]
+            X[i] = (
+                    2
+                    * (X[i] - X[i].min())
+                    / (X[i].max() - X[i].min())
+                    - 1
+            )
+
+        return X
+    # below mode only if not using batch generator
+    # elif mode == 'batched_whole':
+    #     assert len(X.shape) == 4, f"wrong shape for X: {X.shape}"
+    #     for b in range(X.shape[0]):
+    #         batch = X[b, :, :, :]
+    #         for f in range(batch.shape[-1]):
+    #             i = (slice(None),) * 2 + (f,)  # sliceNone == ':'
+    #             batch[i] = (
+    #                     2
+    #                     * (batch[i] - batch[i].min())
+    #                     / (batch[i].max() - batch[i].min())
+    #                     - 1
+    #             )
+
+
 class Plot(object):
     """
     Visualize loss curve for test, and training data....
@@ -200,8 +277,8 @@ class Plot(object):
         :return:
         """
         # Taken from towardsdatascience blogpost, but modified >>>
-        x1_min, x1_max = X[:, 0].min() -.15, X[:, 0].max()+ .15
-        x2_min, x2_max = X[:, 1].min() -.15, X[:, 1].max()+.15
+        x1_min, x1_max = X[:, 0].min() - .15, X[:, 0].max() + .15
+        x2_min, x2_max = X[:, 1].min() - .15, X[:, 1].max() + .15
         dim = (x1_max - x1_min) / size  # mod
         # this essentially gridifies the range, but separates the arrays into layers for easy
         # array based computation
@@ -212,7 +289,7 @@ class Plot(object):
         #                           , np.c_[xx1.ravel(), xx2.ravel()]), axis=1)
         # # <<< Taken from towardsdatascience blogpost, but modified
 
-        X_space = np.c_[xx1.ravel(), xx2.ravel()] #listed coordinates for feeding.
+        X_space = np.c_[xx1.ravel(), xx2.ravel()]  # listed coordinates for feeding.
         h = fn(X_space)  # will be the model forward function
         h = h.reshape(xx1.shape)  # reshaping to align with xx, yy length...kind of dumb tbh.
         plt.contourf(xx1, xx2, h)
@@ -273,7 +350,8 @@ class Datagen(object):
         accuracies = []
         for i in range(self.eval_arr.shape[0]):
             x = self.eval_arr[i, :, :]
-            assert x.shape == (self.eval_arr.shape[-2], self.eval_arr.shape[-1]), f'shape is {x.shape}'
+            assert x.shape == (
+                self.eval_arr.shape[-2], self.eval_arr.shape[-1]), f'shape is {x.shape}'
             _x = x.sum(1)
             assert _x.shape == (self.eval_arr.shape[-1],), f'shape is {_x.shape}'
             _sum_acc = 0
@@ -356,7 +434,7 @@ cifar_labels = {
     8: 'ship',
     9: 'truck'
 }
-data = Datagen(1000,10,label_dict=cifar_labels)
+data = Datagen(1000, 10, label_dict=cifar_labels)
 X, Y = data.data_2d(100)
 #
 # N = 100

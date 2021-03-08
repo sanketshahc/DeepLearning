@@ -115,7 +115,7 @@ class Loss_Function(Function):
         pass
 
 
-# May not need wrapper
+# May not need this wrapper
 class Tensor(object):
     def __init__(self):
         pass
@@ -256,7 +256,7 @@ class Pipeline(object):
         (only for input data)
         x = 2(x - min)/(max -min) -1
         """
-        pass
+
 
 
 
