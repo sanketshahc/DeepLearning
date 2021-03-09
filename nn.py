@@ -1,194 +1,280 @@
 import numpy as np
+from math import *
 
+velocity = 0
 # hyper parameters
-EPOCHS =
-BATCH =
-RATE =
-MOMENTUM =
-velocity =
-DECAY =
+EPOCHS = 1000
+BATCH = 10
+RATE = .03
+MOMENTUM = .1
+velocity = lambda g: MOMENTUM * velocity - RATE * g
+DECAY = .03
 
 class Function(object):
     def __init__(self):
         pass
 
-    def apply_forward(self,*args):
+    def apply_forward(self, *args):
         pass
-        ## apply forward....save inputs?
+        ## apply forward....save outputs?
 
+class Tikhonov(Function):
+    @staticmethod
+    def forward(logit, dim):
+        pass
+    @staticmethod
+    def backward(logit):
+        """"
+        """
 
-class Softmax_Regression(Function):
-    def __init__(self):
-        # any overriding or additional attrs
+class Ridge_Regression(Function):
+    def forward(self, *args):
         pass
 
-    def forward(self,*args):
-        pass
-
-    def backward(self,*args):
+    def backward(self, *args):
         pass
 
 
 class Poisson_Regression(Function):
-    """":type
+    """
     Log-Linear (generalized linear function)...not totally sure what that means.
     """
-    def __init__(self):
+
+    def forward(self, *args):
         pass
 
-    def forward(self,*args):
-        pass
-
-    def backward(self,*args):
-        pass
-
-
-class Ridge_Regression(Function):
-    def __init__(self):
-        pass
-
-    def forward(self,*args):
-        pass
-
-    def backward(self,*args):
+    def backward(self, *args):
         pass
 
 
 class Poisson_Loss(Function):
-    def __init__(self):
+    def forward(self, *args):
         pass
 
-    def forward(self,*args):
-        pass
-
-    def backward(self,*args):
-        pass
-
-
-class Cross_Entropy(Function):
-    def __init__(self):
-        pass
-
-    def forward(self,*args):
-        pass
-
-    def backward(self,*args):
+    def backward(self, *args):
         pass
 
 
 class Mean_Squared_Error(Function):
-    def __init__(self):
+    def forward(self, *args):
+        """
+
+        """
         pass
 
-    def forward(self,*args):
+    def backward(self, *args):
         pass
 
-    def backward(self,*args):
+
+class Softmax_Regression(Function):
+    """
+    input logits of shape:
+    BATCHES x BATCH SIZE x FEATURE HEIGHT x LAYER OUTPUT WIDTH (CLASSES)
+        N/10 x 10 x 1 x 3
+    """
+
+    @staticmethod
+    def forward(logit, dim=-1):
+        """
+        dim is dim along which...typically [-1]
+        :param logit:
+        :param dim:
+        :return:
+        """
+        # assert shape of logit
+        e = logit.exp()
+        soft = e / e.sum(dim)
+        return soft
+
+    @staticmethod
+    def backward(l_fn):
+        """"
+        not needed....also really hard
+        """
         pass
+
+
+class MatMul(Function):
+    @staticmethod
+    def forward(a, b):
+        return a @ b
+
+    @staticmethod
+    def backward(a, b):
+        """
+        not generalized! assuming ab or XW ordering, dy/dw
+
+        multiply by outer in the actual outer function.
+        """
+        return a.transpose()
+
+
+class Cross_Entropy(Function):
+    @staticmethod
+    def forward(y, y_hat, dim=-1, r_fn=None):
+        """
+        curry in lam, p, w
+        only used for softmax classification....
+        input final actvation, in this case softmax
+        dim is dim for loss summation, typically -1,
+
+        this is the element wise function, it must be averaged over the batch elsewhere
+        """
+        # assert shapes of y , y_hat are equal, y_hat can be array class
+        # assert r_fn has right class (function class)
+        loss = (y * y_hat.log()).sum(dim) * -1
+
+        def _reg(lam, p, w):
+            return loss + r_fn.forward(lam, p, w)
+
+        return _reg if r_fn else loss
+        # currently out put is shape [n,]
+        # asser shape of return is 2d?
+
+    @staticmethod
+    def backward(y, x, w, y_hat_fn, logit_fn, r_fn=None):
+        """
+        y is y, x is input, yhatfn is softmax, logitfn is matmul, r_fn is regul...
+        curry in lam, p, w for regularization
+        only used with softmax at moment, can just use softmax forward for y_hat (will have
+        access in network...will also have access to X, W.
+        """
+        # assert y, y_hat area equal
+        # assert y_hat, logitfn issubclass(Softmax_Regression, Function)
+        d_loss = (y_hat_fn(logit_fn(x,w)) - y) * logit_fn.backward(x)
+
+        def _reg(lam, p, w):
+            return d_loss + r_fn.backward(lam, p, w)
+
+        return _reg if r_fn else d_loss
+
 
 
 class Regularize(Function):
-    def __init__(self):
-        pass
+    @staticmethod
+    def forward(lam, p, w):
+        """
+        p is the degree of norm...ie 1 or 2 or
+        can only be 1 or 2 for now.
+        lam is regularization constant
+        w is weights
+        """
+        assert p == 1 or 2
+        norm = ((abs(w) ** p).sum()) ** (1 / p)
+        return lam / p * norm ** p
 
-    def forward(self,*args):
-        pass
+    @staticmethod
+    def backward(lam, p, w):
+        assert p == 1 or 2
 
-    def backward(self,*args):
-        pass
+        def sgn(w):
+            return 1 if w > 0 else -1 if w < 0 else 0
 
-
-class Loss_Function(Function):
-    def __init__(self):
-        pass
-
-    def regularize(self,*args):
-        pass
-
-    def cross_entropy(self,*args):
-        pass
-
-    def mean_squared_error(self,*args):
-        pass
-
-    def poisson(self,*args):
-        pass
+        if p == 1:
+            return sgn(w)
+        if p == 2:
+            return lam * w
 
 
-# May not need this wrapper
-class Tensor(object):
-    def __init__(self):
-        pass
-
-    def history(self,*args):
-        pass
-#   Any expansion to Numpy capability wrapped here
-
-class Network(object):
+class Single_Layer_Network(object):
     """"
+
     this wil have to store the model weight and bias values
     this will have a forward call. something like the Linear class in the minitorch.
-    """
-    def __init__(self):
+    bias embedded in inputs
 
+    data should be 'imported' before being input, but the batching and standardizing happens
+    during training. weights should be imported as random array.
+    Be sure of target shape depending on training type...
+    """
+
+    def __init__(self, inputs, weights, targets, forward_fn, loss_fn, n_classes =1):
+        """:type
+        inputs, weights should be arrays,
+        classes are number of classes, 1 for regression
+        forward is the forward function being called....can be lambda if combining
+        """
+        self.W = weights
+        self.X = inputs
+        self.Y = targets
+        self.C = n_classes
+        self.forward_fn= forward_fn
+        self.loss_fn = loss_fn
+        # self.bias is embedded in inputs as column of 1s
+
+        # pre batching shape assertions:
+        assert self.Y.shape[-1] == self.C
+        assert self.X.shape[-1] == self.W.shape[-2]
+        assert self.W.shape[-1] == self.C
+
+        #type assertions
+        assert isinstance(self.X, np.ndarray)
+        assert isinstance(self.W, np.ndarray)
+        assert isinstance(self.C, np.ndarray)
+        assert isinstance(self.Y, np.ndarray)
+        assert issubclass(self.forward_fn, Function)
+        assert issubclass(self.loss_fn, Function)
+
+        # if dtype == 'input':
+        #     shape(batches, batch_size, feat_h, feat_w)
+        # if dtype == 'weights':
+        #     shape(batches, feat_d, feat_w, output)
+        # if dtype == 'output':
+        #     shape(batches, feat_d, feat_w, output)
+
+    def forward(self):
+        return self.forward_fn.forward(self.inputs,self.weights)
+
+    def update(*args):
+        """
+        updating weights....
+        new velocity = (mu)(old velocity) - (a)(new gradient)
+        new weights = old weights + new velocity
+        """
         pass
-    # consider putting below functions in class also
 
+    def evaluate(*args):
+        '''
+        Load up eval data?
 
-# consider nesting training functions in 1 function
-def train(*args):
-    """
-    standardize data (z = (x-u)/s
-    shape the data arrays
-        weights = n/10 x 10 x 3 x 2
-        input = n/10 x 10 x 1 x 2
-        output = n/10 x 10 x 3 x 1
-    call forward:
-    a = weights * input + bias
-    softmax (a)
+        on eval(test) data:`
+        evaluate for correctness. same thing as above, just additionally to a loss equation,
+        record accuracy (max index vs hot v index for each class, then average the rates together)
+        '''
+        # instead just build a 3d array that is epoch x Y x Yhat:
+        # per training:
+        #   track an 'evaluation' array, from which produce total accuracies and confusion matrix
+        #   track total loss, in list form, indices = epoch
+        #   per epoch:
+        #      track total epoch slice of eval array
+        #      track loss figure total of epoch
+        #      per batch:
+        #          for each combination of y, yhat (argmax),
+        #               add a count to that index of a y x yhat sized array
+        #          calculate total loss or average loss, and add to epoch total
+        #          if criteria meets testing checkpoint,
+        #               then also do above for testing data as well,in a separate array/list
 
-    loss equations (against training data) minus the regularization norm
-        additionally to a loss equation,
-        mean per class accuracy (max index vs hot v index)
-    derivitave of loss
-    """
-    pass
+    def train(self):
+        # gradient descent
+        #   remember to average gradient across batch before subtracting from loss (loss is summed over
+        #   batch....
 
-# gradient descent
-#   remember to average gradient across batch before subtracting from loss (loss is summed over
-#   batch....
-def update(*args):
-    """
-    updating weights....
-    new velocity = (mu)(old velocity) - (a)(new gradient)
-    new weights = old weights + new velocity
-    """
-    pass
+        """
+        call batcher on inputs
+        call forward: (can
 
-def evaluate(*args):
-    '''
-    Load up eval data?
-
-    on eval(test) data:`
-    evaluate for correctness. same thing as above, just additionally to a loss equation,
-    record accuracy (max index vs hot v index for each class, then average the rates together)
-    '''
-    # instead just build a 3d array that is epoch x Y x Yhat:
-    # per training:
-    #   track an 'evaluation' array, from which produce total accuracies and confusion matrix
-    #   track total loss, in list form, indices = epoch
-    #   per epoch:
-    #      track total epoch slice of eval array
-    #      track loss figure total of epoch
-    #      per batch:
-    #          for each combination of y, yhat (argmax),
-    #               add a count to that index of a y x yhat sized array
-    #          calculate total loss or average loss, and add to epoch total
-    #          if criteria meets testing checkpoint,
-    #               then also do above for testing data as well,in a separate array/list
-    #
-    #
-    pass
+        loss equations (against training data) minus the regularization norm
+            additionally to a loss equation,
+            mean per class accuracy (max index vs hot v index)
+        derivitave of loss
+        """
+        # prep inputs
+        X = Pipeline.batch(self.X)
+        assert len(self.X.shape) == 4
+        assert len(self.W.shape) == 4
+        assert self.X.shape[1] == BATCH
+        assert self.X.shape[0] == self.W.shape[0] == self.X.shape[-1]/BATCH
 
 
 
@@ -201,8 +287,8 @@ class Pipeline(object):
     epochs = 1000 (loops over data, loops of descent algo)
 
     Load up eval data???? output eval data???
-
     '''
+
     def __init__(self):
         pass
 
@@ -219,7 +305,6 @@ class Pipeline(object):
         ouputs a list, and the bather is what batches....
 
         """
-
 
     def cifar(self):
         """
@@ -247,7 +332,6 @@ class Pipeline(object):
 
         you can make a generator function to do precisely this....
         """
-
         pass
 
     def standardize(self):
@@ -256,9 +340,6 @@ class Pipeline(object):
         (only for input data)
         x = 2(x - min)/(max -min) -1
         """
-
-
-
 
 
 class Plot(object):
@@ -274,28 +355,15 @@ class Plot(object):
 
     it also gets the loss log
     """
+
     def __init__(self):
         pass
 
     def curves(self):
-
         pass
 
     def spaces(self):
-        # Plotting decision regions
-        # x_min, x_max = X_train[:, 0].min() - 1, X_train[:, 0].max() + 1
-        # y_min, y_max = X_train[:, 1].min() - 1, X_train[:, 1].max() + 1
-        # xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
-        #                      np.arange(y_min, y_max, 0.1))
-        # X = np.concatenate((np.ones((xx.shape[0] * xx.shape[1], 1))
-        #                     , np.c_[xx.ravel(), yy.ravel()]), axis=1)
-        # h = hypothesis(theta, X, 2)
-        # h = h.reshape(xx.shape)
-        # plt.contourf(xx, yy, h)
-        # plt.scatter(X_train[:, 0], X_train[:, 1], c=y_train,
-        #             s=30, edgecolor='k')
-        # plt.xlabel("Marks obtained in 1st Exam")
-        # plt.ylabel("Marks obtained in 2nd Exam")
+
         pass
 
     def histrogram(self):
@@ -311,28 +379,10 @@ class Plot(object):
         :return:
         """
 
-        # labels = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
-        #
-        # def plot_confusion_matrix(df_confusion, title='Confusion Matrix', xlabels=labels, ylabels=labels, cmap='Blues'):
-        #     plt.matshow(df_confusion, cmap=cmap) # imshow
-        #     plt.colorbar()
-        #     tick_marks = np.arange(len(df_confusion.columns))
-        #     plt.xticks(tick_marks, labels, rotation=45)
-        #     plt.yticks(tick_marks, labels)
-        #     plt.ylabel(df_confusion.index.name)
-        #     plt.xlabel(df_confusion.columns.name)
-        #
-        # # Source: https://stackoverflow.com/questions/2148543/how-to-write-a-confusion-matrix-in-python
 
 
         pass
 
-
-
-# Testing module
-#   testing for each function
-
-#todo test the data functions
 
 
 
@@ -340,7 +390,7 @@ class Plot(object):
 # each layer stores weights / bias....and the weights store the grad..
 
 
-#Is it accurate to think of each class def as an encapsulation or frame, and If python doesn't
+# Is it accurate to think of each class def as an encapsulation or frame, and If python doesn't
 # find a binding in the present frame, it moves up to the parent, and keeps going up to find it?
 # And while the subclass has access to all these (class level, not instance level) things,
 # it's place in the structure is essentially just set by whatever is passed into the initial
@@ -349,4 +399,4 @@ class Plot(object):
 # sense? Sorry if that's confusing.  Thank
 
 
-#currying is returning a function..
+# currying is returning a function..

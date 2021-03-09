@@ -6,7 +6,6 @@ from matplotlib import ticker, cm
 import matplotlib.pyplot as plt
 import random
 
-
 BATCH = 10
 
 # paths to data
@@ -15,7 +14,7 @@ resources = {
     "iris_train": "resources/iris-train.txt",
     "iris_test": "resources/iris-test.txt",
     "cifar_train": "resources/cifar-10-batches-py/data_batch_1",
-    "cifar_test": "",
+    "cifar_test": "resources/cifar-10-batches-py/test_batch",
     "msd_train": ("resources/YearPredictionMSD.txt", [0, 463713]),
     "msd_test": ("resources/YearPredictionMSD.txt", [-51630, -1])
 }
@@ -58,8 +57,9 @@ def delimited(path, delim, randomize=False, mode="classification"):
     X, Y = [], []
     interval = None
     (path, interval) = (path[0], path[1]) if type(path) == tuple else (path, interval)
-    line_generator = enumerate((line for line in open(path).readlines()))
-    if interval:
+    lines = open(path).readlines()
+    line_generator = enumerate((line for line in lines))
+    if interval:  # for specific line intervals.
         interval[0] = interval[0] + len(lines) if interval[0] < 0 else interval[0]
         interval[1] = interval[1] + len(lines) if interval[1] < 0 else interval[1]
     for l, line in line_generator:
@@ -93,7 +93,7 @@ def hot_helper(Y):
             y_hot[l] = 1 if m == y else 0
         Y_hot.append(y_hot)
 
-    return Y_hot
+    return np.array(Y_hot)
 
 
 ### cifar:
@@ -155,34 +155,44 @@ def cifar(path, mode="classification"):
     return X, Y, cifar_labels
 
 
-def batch(X,batch_size=BATCH,output = 1,to_standardize=True):
+def batch_gen(X, Y, feat_h=1, feat_d=1, output=1, to_standardize=True):
     """
+    note that this takes in inputs X and targets Y and ouputs a batched tuple.
+
     assuming input shape has examples as first dim, followed by sample shape.
+    only inputs and targets are batched.
 
-    the batcher is what worries about shapes...it takes output from above functions and
-    outputs the right shape....consider function currying for this....
-
-    I wonder if there's any way to make an iterator out of this....
-    essentially what is required is iterating along the data pairs, forming a 'tensor' for
-    each batch of shape (batch x output x input)
-
-    you can make a generator function to do precisely this....
-
+    Input: BATCHES x BATCH SIZE x FEATURE HEIGHT x INPUT FEATURE WIDTH
+            N/10 x 10 x 1 x 2
+    Weights: BATCHES x FEATURE DEPTH x FEATURE WIDTH (WEIGHTS) x LAYER OUTPUT WIDTH (CLASSES)
+            N/10 x 1 x 2 x 3
+    Output: BATCHES x BATCH SIZE x FEATURE HEIGHT x LAYER OUTPUT WIDTH (CLASSES)
+            N/10 x 10 x 1 x 3
     input entire input matrix, indicating whether normalized or not.
+
     """
-    # assert numpy
-    # slice / reshape to fit batch size...
-    features = X.shape[-1] # number features
-    batches = X.shape[0] // batch_size # number batches
-    ex = batches * batch_size # new number of examples
-    sliced_X = X[0:ex,...] # using ellipses!
-    batched_X = sliced_X.reshape(batches,batch_size,output,features)
+    assert isinstance(X, np.ndarray)
+    assert isinstance(Y, np.ndarray)
+    assert Y.shape[0] == X.shape[0]
+
+    # slice / reshape X,Y to fit batch size...
+    classes = Y.shape[-1] # how many different classes?
+    feat_w = X.shape[-1]  # number feat_w
+    batch_size = BATCH
+    batches = X.shape[0] // batch_size  # number batches
+    ex = batches * batch_size  # new number of examples
+    sliced_X = X[0:ex, ...]  # using ellipses!
+    sliced_Y = Y[0:ex, ...]
+    batched_X = sliced_X.reshape(batches, batch_size, feat_h, feat_w)
+    batched_Y = sliced_Y.reshape(batches, batch_size, feat_h, classes)
     for b in range(batches):
         # i = (slice(None),) * fixed_dims + (b,)
-        batch = batched_X[b,...]
-        yield standardize(batch, mode='feature') if to_standardize else batch
-        #should be iterated on in trainer, as a generator.
-...
+        batch_x = batched_X[b, ...]
+        batch_x = standardize(batch_x, mode='feature') if to_standardize else batch_x
+        batch_y = batched_Y[b, ...]
+        yield (batch_x, batch_y)
+        # should be iterated on in trainer, as a generator.
+
 
 def standardize(X, mode='feature'):
     """
@@ -196,37 +206,38 @@ def standardize(X, mode='feature'):
      all: all features for all examples,
      feature: each feature vector across all examples in input
      batch: each feature vector across all examples in batch, per batch
+
+     for assertions: will need hypothesis testing module... for assertclose.
     """
+    add_bias = lambda X: np.concatenate((X, np.ones((X.shape[-2], 1))), axis=1)
+    # adding bias column.
+
     if mode == 'all':
         X = 2 * (X - X.min()) / (X.max() - X.min()) - 1
+        add_bias(X)
+        assert X[:, -1].all() == 1
         return X
-    # use feature mode with batch generator fn
     elif mode == 'feature':
-        fixed_dims = len(X.shape) - 1
+        # fixed_dims = len(X.shape) - 1
         for f in range(X.shape[-1]):
             # i = (slice(None),) * fixed_dims + (f,)  # sliceNone == ':'
-            i = [...,f]
-            X[i] = (
-                    2
+            i = (..., f)
+            X[i] = (2
                     * (X[i] - X[i].min())
                     / (X[i].max() - X[i].min())
-                    - 1
-            )
-
+                    - 1)
+        add_bias(X)
+        assert X[:, -1].all() == 1
         return X
-    # below mode only if not using batch generator
-    # elif mode == 'batched_whole':
-    #     assert len(X.shape) == 4, f"wrong shape for X: {X.shape}"
-    #     for b in range(X.shape[0]):
-    #         batch = X[b, :, :, :]
-    #         for f in range(batch.shape[-1]):
-    #             i = (slice(None),) * 2 + (f,)  # sliceNone == ':'
-    #             batch[i] = (
-    #                     2
-    #                     * (batch[i] - batch[i].min())
-    #                     / (batch[i].max() - batch[i].min())
-    #                     - 1
-    #             )
+    elif mode == 'z_feature':
+        for f in range(X.shape[-1]):
+            i = (..., f)
+            X[i] = (X[i] - X[i].mean()) / X[i].std()
+        add_bias(X)
+        assert X[:, -1].all() == 1
+        return X
+    else:
+        raise ValueError("Choose mode from all, feature, or z_feature")
 
 
 class Plot(object):
@@ -276,7 +287,6 @@ class Plot(object):
         fn is the model function.
         :return:
         """
-        # Taken from towardsdatascience blogpost, but modified >>>
         x1_min, x1_max = X[:, 0].min() - .15, X[:, 0].max() + .15
         x2_min, x2_max = X[:, 1].min() - .15, X[:, 1].max() + .15
         dim = (x1_max - x1_min) / size  # mod
@@ -287,8 +297,6 @@ class Plot(object):
         # 1's for bias?
         # X_space = np.concatenate((np.ones((xx1.shape[0] * xx1.shape[1], 1))
         #                           , np.c_[xx1.ravel(), xx2.ravel()]), axis=1)
-        # # <<< Taken from towardsdatascience blogpost, but modified
-
         X_space = np.c_[xx1.ravel(), xx2.ravel()]  # listed coordinates for feeding.
         h = fn(X_space)  # will be the model forward function
         h = h.reshape(xx1.shape)  # reshaping to align with xx, yy length...kind of dumb tbh.
@@ -422,6 +430,8 @@ class Datagen(object):
         return self.eval_arr.sum(0)
 
 
+######
+
 cifar_labels = {
     0: 'airplane',
     1: 'automobile',
@@ -436,40 +446,3 @@ cifar_labels = {
 }
 data = Datagen(1000, 10, label_dict=cifar_labels)
 X, Y = data.data_2d(100)
-#
-# N = 100
-# x = np.linspace(-3.0, 3.0, N)
-# y = np.linspace(-2.0, 2.0, N)
-#
-# X, Y = np.meshgrid(x, y)
-#
-# # A low hump with a spike coming out.
-# # Needs to have z/colour axis on a log scale so we see both hump and spike.
-# # linear scale only shows the spike.
-# Z1 = np.exp(-X**2 - Y**2)
-# Z2 = np.exp(-(X * 10)**2 - (Y * 10)**2)
-# z = Z1 + 50 * Z2
-#
-# # Put in some negative values (lower left corner) to cause trouble with logs:
-# z[:5, :5] = -1
-#
-# # The following is not strictly essential, but it will eliminate
-# # a warning.  Comment it out to see the warning.
-# z = ma.masked_where(z <= 0, z)
-#
-#
-# # Automatic selection of levels works; setting the
-# # log locator tells contourf to use a log scale:
-# fig, ax = plt.subplots()
-# cs = ax.contourf(X, Y, z, locator=ticker.LogLocator(), cmap=cm.PuBu_r)
-#
-# # Alternatively, you can manually set the levels
-# # and the norm:
-# # lev_exp = np.arange(np.floor(np.log10(z.min())-1),
-# #                    np.ceil(np.log10(z.max())+1))
-# # levs = np.power(10, lev_exp)
-# # cs = ax.contourf(X, Y, z, levs, norm=colors.LogNorm())
-#
-# cbar = fig.colorbar(cs)
-#
-# plt.show()
