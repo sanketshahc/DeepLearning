@@ -1,8 +1,6 @@
-import pickle
 import numpy as np
-from numpy import ma
+import pickle
 import matplotlib
-from matplotlib import ticker, cm
 import matplotlib.pyplot as plt
 import random
 
