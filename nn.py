@@ -1,14 +1,14 @@
 import numpy as np
 from math import *
 
-velocity = 0
 # hyper parameters
 EPOCHS = 1000
+RC = .05
 BATCH = 10
 RATE = .03
 MOMENTUM = .1
-velocity = lambda g: MOMENTUM * velocity - RATE * g
 DECAY = .03
+
 
 class Function(object):
     def __init__(self):
@@ -18,14 +18,17 @@ class Function(object):
         pass
         ## apply forward....save outputs?
 
+
 class Tikhonov(Function):
     @staticmethod
     def forward(logit, dim):
         pass
+
     @staticmethod
     def backward(logit):
         """"
         """
+
 
 class Ridge_Regression(Function):
     def forward(self, *args):
@@ -58,8 +61,12 @@ class Poisson_Loss(Function):
 class Mean_Squared_Error(Function):
     def forward(self, *args):
         """
-
         """
+        def round_helper(Y):
+            """
+            round array input and return.
+            """
+            pass
         pass
 
     def backward(self, *args):
@@ -120,8 +127,10 @@ class Cross_Entropy(Function):
 
         this is the element wise function, it must be averaged over the batch elsewhere
         """
-        # assert shapes of y , y_hat are equal, y_hat can be array class
-        # assert r_fn has right class (function class)
+        assert isinstance(y_hat, np.ndarray)
+        assert y.shape == y_hat.shape
+        assert issubclass(r_fn, Function) if r_fn else None
+
         loss = (y * y_hat.log()).sum(dim) * -1
 
         def _reg(lam, p, w):
@@ -134,20 +143,23 @@ class Cross_Entropy(Function):
     @staticmethod
     def backward(y, x, w, y_hat_fn, logit_fn, r_fn=None):
         """
-        y is y, x is input, yhatfn is softmax, logitfn is matmul, r_fn is regul...
+        y is y, x is input, yhatfn is output fn or softmax, logitfn is matmul, r_fn is regul...
         curry in lam, p, w for regularization
         only used with softmax at moment, can just use softmax forward for y_hat (will have
         access in network...will also have access to X, W.
-        """
-        # assert y, y_hat area equal
-        # assert y_hat, logitfn issubclass(Softmax_Regression, Function)
-        d_loss = (y_hat_fn(logit_fn(x,w)) - y) * logit_fn.backward(x)
 
+        arguments for other loss backwards should be same for other functions, but w/o fn inputs
+        """
+        assert issubclass(y_hat_fn, Function)
+        assert issubclass(logit_fn, Function)
+        d_loss =  logit_fn.backward(x,w) @ (y_hat_fn.forward(logit_fn.forward((x,w))) - y)
+        #chain ruling for dl/dw
+        assert d_loss.shape == (BATCH,w.shape[-2],w.shape[-1]), \
+            f"ooops check loss deriv, it's {d_loss.shape}"
         def _reg(lam, p, w):
             return d_loss + r_fn.backward(lam, p, w)
 
         return _reg if r_fn else d_loss
-
 
 
 class Regularize(Function):
@@ -184,83 +196,178 @@ class Single_Layer_Network(object):
     bias embedded in inputs
 
     data should be 'imported' before being input, but the batching and standardizing happens
-    during training. weights should be imported as random array.
+    during training. weights should be imported as random aπrray.
     Be sure of target shape depending on training type...
+
+    ATTN: will have to hardcode loss backwards unfort...too complicated here to gneralize.
     """
 
-    def __init__(self, inputs, weights, targets, forward_fn, loss_fn, n_classes =1):
-        """:type
+    def __init__(
+            self,
+            inputs,
+            targets,
+            test_inputs,
+            test_targets,
+            loss_fn,
+            output_fn,
+            logit_fn,
+            feat_d=1,
+            n_classes=1
+    ):
+        """
         inputs, weights should be arrays,
         classes are number of classes, 1 for regression
-        forward is the forward function being called....can be lambda if combining
+        forward is the forward function being called....can be lambda if combining, or just the
+        loss fn is the loss function CLASS
+        logit fn is the logit_fn for
         """
-        self.W = weights
+        # FUNCTIONAL ARGS:
+        self.r_fn = Regularize
+        self.loss_fn = loss_fn
+        self.logit_fn = logit_fn # sometimes same as output
+        self.output_fn = output_fn # only different in case of softmax regression
+
+        # DATA AND DIMENSIONAL ARGS:
         self.X = inputs
         self.Y = targets
         self.C = n_classes
-        self.forward_fn= forward_fn
-        self.loss_fn = loss_fn
-        # self.bias is embedded in inputs as column of 1s
+        feat_w = self.X.shape[-1]  # feat width (includes bias)
+        self.W = np.random.rand(feat_d, feat_w, self.C) # inititalizing random weights.
+        # self.bias is embedded in inputs (X) as column of 1s
+        self.X_t = test_inputs
+        self.Y_t = test_targets
 
-        # pre batching shape assertions:
+        # PRE-BATCHING SHAPE ASSERTIONS:
         assert self.Y.shape[-1] == self.C
+        assert self.Y_t.shape[-1] == self.C
         assert self.X.shape[-1] == self.W.shape[-2]
+        assert self.X_t.shape[-1] == self.W.shape[-2]
         assert self.W.shape[-1] == self.C
 
-        #type assertions
-        assert isinstance(self.X, np.ndarray)
-        assert isinstance(self.W, np.ndarray)
-        assert isinstance(self.C, np.ndarray)
-        assert isinstance(self.Y, np.ndarray)
-        assert issubclass(self.forward_fn, Function)
-        assert issubclass(self.loss_fn, Function)
+        # UDPATING, LOGGING, EVALUATION
+        # self.eval_array is an array data structure to track accuracy and generate accuracy
+        # visualization like confusino matrix and mean accuracy curves. if only one class (
+        # regression), then array is (epochs x 2 x 1), otherwise (epochs x classes x classes)
+        if self.C == 1:
+            self.training_eval_array = np.zeros((EPOCHS, 2, 1)) # not needed
+            self.testing_eval_array = np.zeros((EPOCHS, 2, 1))  # not needed
+        else:
+            self.training_eval_array = np.zeros((EPOCHS, self.C, self.C))
+            self.testing_eval_array = np.zeros((EPOCHS, self.C, self.C))
+        self.velocity = 0 # inititalized at 0
+        self.training_losses = []
+        self.testing_losses = []
 
+        # NOTES ON SHAPE:
         # if dtype == 'input':
         #     shape(batches, batch_size, feat_h, feat_w)
         # if dtype == 'weights':
         #     shape(batches, feat_d, feat_w, output)
+        # not actually different weights obj per batch, but just helpful to think in that way in
+        # terms of shape
         # if dtype == 'output':
-        #     shape(batches, feat_d, feat_w, output)
+        #     shape(batches, feat_d, feat_h, output)
 
-    def forward(self):
-        return self.forward_fn.forward(self.inputs,self.weights)
+        # TYPE ASSERTIONS
+        assert isinstance(self.X, np.ndarray)
+        assert isinstance(self.W, np.ndarray)
+        assert isinstance(self.C, np.ndarray)
+        assert isinstance(self.Y, np.ndarray)
+        assert issubclass(self.logit_fn, Function)
+        assert issubclass(self.output_fn, Function)
+        assert issubclass(self.loss_fn, Function)
 
-    def update(*args):
+    def forward(self):  # argument must be curried
+        if isinstance(self.output_fn,Softmax_Regression):
+            ret = lambda x,w: self.output_fn.forward(self.logit_fn.forward(x,w))
+        else:
+            ret = lambda x,w: self.output_fn.forward(x,w)
+
+        return ret
+
+    # def loss(self): # argument must be curried
+    #     return self.loss_fn.forward
+    # Called directly in trainin
+
+    def update(self,d_loss):
         """
+        input: d_loss
+        output: none
+        (changes weights only)
+
         updating weights....
-        new velocity = (mu)(old velocity) - (a)(new gradient)
+        new velocity = (mu)(old velocity) - (a/BATCH)(new gradient.sum(0)
         new weights = old weights + new velocity
+
+        the d_loss is a 3d matrix of Batch x Weights basically. So the idea is to take the
+        average along the first dimension. That's really the key insight, is the shape of the
+        gradient is extra dimensional...makse sense tho since each ouput has a gradienet!
+
+        so here, the idea is to take average of weights
         """
-        pass
+        d_loss_sum = d_loss.sum(0)
+        assert d_loss_sum.shape[-2] == self.W.shape[-2]
+        assert d_loss_sum.shape[-1] == self.W.shape[-1]
+        self.velocity = MOMENTUM * self.velocity - RATE * d_loss_sum/BATCH
+        self.W = self.W + self.velocity
 
-    def evaluate(*args):
-        '''
-        Load up eval data?
+    def evaluate(self,mode,epoch,Y,Y_hat):
+        """
+        needs to be called per batch per epoch
+        """
+        assert mode == "training" or "testing"
+        eval_array = self.training_eval_array if mode == "training" else self.testing_eval_array
+        Y_hat_argsmax = np.argmax(Y_hat, axis=-1)
+        Y_argsmax = np.argmax(Y, axis=-1)
+        for j,k in zip(Y_hat_argsmax,Y_argsmax):
+            i = epoch
+            eval_array[i,j,k] += 1 #adding count to eval array
 
-        on eval(test) data:`
-        evaluate for correctness. same thing as above, just additionally to a loss equation,
-        record accuracy (max index vs hot v index for each class, then average the rates together)
+    def testing(self,epoch,p):
         '''
+        called per epoch
+        '''
+        for X, Y in Pipeline.batch_gen(self.X_t, self.Y_t, output=self.C):
+            W = self.W  # should already be shaped for batch, initiated at random
+
+            # per batch shape assertions
+            assert len(X.shape) == 3
+            assert len(Y.shape) == 3
+            assert len(W.shape) == 3
+            assert X.shape[0] == W.shape[0] == X.shape[-1] / BATCH
+            assert X.shape[1] == BATCH
+            assert X.shape[0] == W.shape[0] == X.shape[-1] / BATCH
+            Y_hat = self.forward()(X, W)  # currying to forward_fn
+            if not p:
+                loss = self.loss_fn.forward(Y, Y_hat)
+            elif p:
+                loss = self.loss_fn.forward(Y, Y_hat, self.r_fn)(RC, p, W)
+            self.testing_losses.append(loss.sum())
+            self.evaluate("testing",epoch,Y,Y_hat)
+
+        #     todo print a report on log
+
         # instead just build a 3d array that is epoch x Y x Yhat:
         # per training:
         #   track an 'evaluation' array, from which produce total accuracies and confusion matrix
         #   track total loss, in list form, indices = epoch
         #   per epoch:
-        #      track total epoch slice of eval array
         #      track loss figure total of epoch
+        #      track total epoch slice of eval array
         #      per batch:
+        #          calculate total loss or average loss, and add to epoch total
         #          for each combination of y, yhat (argmax),
         #               add a count to that index of a y x yhat sized array
-        #          calculate total loss or average loss, and add to epoch total
         #          if criteria meets testing checkpoint,
         #               then also do above for testing data as well,in a separate array/list
 
-    def train(self):
-        # gradient descent
-        #   remember to average gradient across batch before subtracting from loss (loss is summed over
-        #   batch....
+
+
+    def train(self, p):
 
         """
+        p = 0 for no regularization....must specify! p is the degree of regularization
+
         call batcher on inputs
         call forward: (can
 
@@ -269,13 +376,49 @@ class Single_Layer_Network(object):
             mean per class accuracy (max index vs hot v index)
         derivitave of loss
         """
-        # prep inputs
-        X = Pipeline.batch(self.X)
-        assert len(self.X.shape) == 4
-        assert len(self.W.shape) == 4
-        assert self.X.shape[1] == BATCH
-        assert self.X.shape[0] == self.W.shape[0] == self.X.shape[-1]/BATCH
 
+        for epoch in EPOCHS:
+            # stuff per epoch
+            for X, Y in Pipeline.batch_gen(self.X, self.Y, output=self.C):
+                W = self.W  # should already be shaped for batch, initiated at random
+                # per batch shape assertions
+                assert len(X.shape) == 3
+                assert len(Y.shape) == 3
+                assert len(W.shape) == 3
+                assert X.shape[0] == W.shape[0] == X.shape[-1] / BATCH
+                assert X.shape[1] == BATCH
+                assert X.shape[0] == W.shape[0] == X.shape[-1] / BATCH
+                Y_hat = self.forward()(X, W)  # currying to forward_fn
+                if not p:
+                    loss = self.loss_fn.forward(Y, Y_hat)
+                elif p:
+                    loss = self.loss_fn.forward(Y, Y_hat, self.r_fn)(RC, p, W)
+                self.training_losses.append(loss.sum())
+
+                #########
+                # ATTN: will have to hardcode for each network type :(
+                ########
+                if not p:
+                    d_loss = self.loss_fn.backward(
+                        Y,
+                        X,
+                        W,
+                        self.output_fn,
+                        self.logit_fn,
+                        self.r_fn)
+                elif p:
+                    d_loss = self.loss_fn.backward(
+                        Y,
+                        X,
+                        W,
+                        self.output_fn,
+                        self.logit_fn,
+                        self.r_fn)(RC, p, W)
+                #####
+                # << outputs dl/dw
+                self.update(d_loss)
+                self.evaluate("training",epoch,Y,Y_hat)
+            self.testing(epoch,p)
 
 
 class Pipeline(object):
@@ -321,7 +464,7 @@ class Pipeline(object):
         """
         pass
 
-    def batch(self, shape):
+    def batch_gen(self, shape):
         """
         the batcher is what worries about shapes...it takes output from above functions and
         outputs the right shape....consider function currying for this....
@@ -363,7 +506,6 @@ class Plot(object):
         pass
 
     def spaces(self):
-
         pass
 
     def histrogram(self):
@@ -379,12 +521,7 @@ class Plot(object):
         :return:
         """
 
-
-
         pass
-
-
-
 
 # in minitorch, the network is a module class which stores the bias and weights...essentially
 # each layer stores weights / bias....and the weights store the grad..
@@ -400,3 +537,14 @@ class Plot(object):
 
 
 # currying is returning a function..
+
+
+
+# rememeber each output example in the batch has a gradient with rt to weights input
+# etc....event thought they're being evaluated at the same weight values.....and so we are
+# summing across the whole ouput example batch, to get an overall loss, so that we can get in
+# a sense an overall gradient. if we average the loss across the batch then we get the
+# average gradient wrt to weights. ...so if we've been given that value, then we can ...
+#  if wwe valuate it at a specific random value, we' can see then the contribution of shift
+# in each weight to the average loss....of the batch, and so that value, which necessarily
+# must be the size of teh weight matrix, can be multiplied by rate and subtracted

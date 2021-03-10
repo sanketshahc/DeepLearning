@@ -19,7 +19,6 @@ resources = {
     "msd_test": ("resources/YearPredictionMSD.txt", [-51630, -1])
 }
 
-
 def randomize(*sets):
     """
     be sure and call function with a * if needing different sets
@@ -98,23 +97,24 @@ def hot_helper(Y):
 
 ### cifar:
 # changing from binary to python dictionary of (batch, label, data, filename)
-def unpickle(file):
+def unpickle_helper(file):
     """input file path, output dictionary object, of labels, data, filenames """
     with open(file, 'br') as f:
         d = pickle.load(f, encoding='bytes')  # need to specify encoding
+
     return d
 
 
 # helper function to check when to stop iterating through batch (counting function for total
 # images in arr2d)
-def count_elements(collection, s=0):
+def countel_helper(collection, s=0):
     """
     counts total first dimension elements in a multidimensional array
     """
     for nested in collection:
         if type(nested) == list:
             s += len(nested)
-            count_elements(nested)
+            countel_helper(nested)
 
     return s
 
@@ -127,7 +127,7 @@ def cifar(path, mode="classification"):
 
     input is already randomized
     """
-    batch = unpickle(path)  # convert from binary
+    batch = unpickle_helper(path)  # convert from binary
     # if needing to reshape or process before outputing, use this:
     # Y = []
     # X = []
@@ -155,7 +155,7 @@ def cifar(path, mode="classification"):
     return X, Y, cifar_labels
 
 
-def batch_gen(X, Y, feat_h=1, feat_d=1, output=1, to_standardize=True):
+def batch_gen(X, Y, output=1, feat_h=1, feat_d=1, add_bias=True, to_standardize=True):
     """
     note that this takes in inputs X and targets Y and ouputs a batched tuple.
 
@@ -185,10 +185,16 @@ def batch_gen(X, Y, feat_h=1, feat_d=1, output=1, to_standardize=True):
     sliced_Y = Y[0:ex, ...]
     batched_X = sliced_X.reshape(batches, batch_size, feat_h, feat_w)
     batched_Y = sliced_Y.reshape(batches, batch_size, feat_h, classes)
+    batch_bias = np.ones((batch_size, feat_h, 1))
     for b in range(batches):
         # i = (slice(None),) * fixed_dims + (b,)
         batch_x = batched_X[b, ...]
         batch_x = standardize(batch_x, mode='feature') if to_standardize else batch_x
+        print(batch_x.shape, batch_bias.shape)
+        batch_x = np.concatenate((     # adding bias column.
+            batch_x, batch_bias
+        ), axis = -1)
+        assert batch_x[:, -1].all() == 1
         batch_y = batched_Y[b, ...]
         yield (batch_x, batch_y)
         # should be iterated on in trainer, as a generator.
@@ -209,31 +215,38 @@ def standardize(X, mode='feature'):
 
      for assertions: will need hypothesis testing module... for assertclose.
     """
-    add_bias = lambda X: np.concatenate((X, np.ones((X.shape[-2], 1))), axis=1)
-    # adding bias column.
-
     if mode == 'all':
         X = 2 * (X - X.min()) / (X.max() - X.min()) - 1
-        add_bias(X)
         assert X[:, -1].all() == 1
+        assert X.max() == 1 and X.min() == -1
         return X
     elif mode == 'feature':
         # fixed_dims = len(X.shape) - 1
         for f in range(X.shape[-1]):
             # i = (slice(None),) * fixed_dims + (f,)  # sliceNone == ':'
             i = (..., f)
+            mX = X[i].max()
+            nX = X[i].min()
             X[i] = (2
-                    * (X[i] - X[i].min())
-                    / (X[i].max() - X[i].min())
+                    * (X[i] - nX)
+                    / (mX - nX)
                     - 1)
-        add_bias(X)
+            mX = float(X[i].max())
+            nX = float(X[i].min())
+            # assert np.testing.assert_almost_equal(X[i].mean(), 0, decimal=6)
+            # any assertions about mean here?
+            print(nX,mX)
+            np.testing.assert_almost_equal(1.0, mX, decimal=1), \
+                f"Max not 1.0, but {mX}"
+            np.testing.assert_almost_equal(-1.0, nX, decimal=1), \
+                f"Min not -1.0, but {nX}"
         assert X[:, -1].all() == 1
         return X
     elif mode == 'z_feature':
         for f in range(X.shape[-1]):
             i = (..., f)
             X[i] = (X[i] - X[i].mean()) / X[i].std()
-        add_bias(X)
+            assert np.testing.assert_almost_equal(X[i].mean(), 0, decimal=7)
         assert X[:, -1].all() == 1
         return X
     else:
@@ -308,17 +321,27 @@ class Plot(object):
         plt.show()
 
     @staticmethod
-    def histogram(data, ind_label, dep_label, title):
+    def histogram(*data, ind_label, dep_label, title):
         """
-        this is a 1d histogram. input is a tuple of 1d on the numberlinespace, and then a dict of counts
-        assert that data
+        each data input is tuple of len3:
+        1d data and count dict and data label, although dict isn't really needed.
+        everything after unpacker is kwarg
+        this is a 1d histogram. hist method auto-counts the data, so no need to count separately.
         output is simple histogram
         """
         fig, ax = plt.subplots(1, 1, sharey=True, tight_layout=True)
-        ax.hist(data[0], bins=len(data[1].keys()))
         ax.set(xlabel=ind_label, ylabel=dep_label,
                title=title)
+        c = lambda: random.random()
+        for each in data:
+            assert len(each) == 3, "Please ensure data input is correct tuple of tuples"
+            ax.hist(each[0], bins=len(each[1].keys()), label = each[2], color = (c(),c(),c()))
+
+        plt.legend(loc="best", frameon=False)
         plt.show()
+        plt.legend()
+
+
 
     @staticmethod
     def confusion(confusion_array, label_dict, y_label="Predicted", x_label="Empirical"):
@@ -383,7 +406,7 @@ class Datagen(object):
                 dict[i] = 1
             else:
                 dict[i] += 1
-        return data, dict
+        return data, dict, f"test{random.randint(0,9)}"
 
     @staticmethod
     def data_2d(count):
