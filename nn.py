@@ -6,12 +6,11 @@ import random
 from math import *
 
 # hyper parameters
-EPOCHS = 1000
-RC = .05
+EPOCHS = 10000
 BATCH = 10
-RATE = .03
-MOMENTUM = .1
-DECAY = .03
+RATE = .005
+MOMENTUM = 0
+RC = .0001
 
 RESOURCES = {
     "iris_train": "resources/iris-train.txt",
@@ -206,6 +205,7 @@ class Cross_Entropy(Function):
         this is the element wise function, it must be averaged over the batch elsewhere
         """
         assert isinstance(y_hat, np.ndarray)
+        assert isinstance(dim, int)
         assert y.shape == y_hat.shape, f"y.shape: {y.shape}, yhat.shape{y_hat.shape}"
         if r_fn:
             assert issubclass(r_fn, Function)
@@ -416,14 +416,15 @@ class Single_Layer_Network(object):
             assert len(Y.shape) == 3
             assert len(W.shape) == 3
             assert X.shape[-1] == self.W.shape[-2]
-            assert X.shape[1] == BATCH
+            assert X.shape[0] == BATCH
             Y_hat = self.forward()(X, W)  # currying to forward_fn
             if not p:
                 loss = self.loss_fn.forward(Y, Y_hat)
             elif p:
-                loss = self.loss_fn.forward(Y, Y_hat, self.r_fn)(RC, p, W)
+                loss = self.loss_fn.forward(Y, Y_hat, r_fn=self.r_fn)(RC, p, W)
             self.testing_losses.append(loss.sum())
             self.evaluate("testing",epoch,Y,Y_hat)
+        print(loss.sum())
 
         #     todo print a report on log
 
@@ -471,7 +472,7 @@ class Single_Layer_Network(object):
                 if not p:
                     loss = self.loss_fn.forward(Y, Y_hat)
                 elif p:
-                    loss = self.loss_fn.forward(Y, Y_hat, self.r_fn)(RC, p, W)
+                    loss = self.loss_fn.forward(Y, Y_hat, r_fn=self.r_fn)(RC, p, W)
                 self.training_losses.append(loss.sum())
 
                 #########
@@ -498,7 +499,7 @@ class Single_Layer_Network(object):
                 self.update(d_loss)
                 self.evaluate("training",epoch,Y,Y_hat)
             self.testing(epoch,p)
-            print(loss)
+            # print(loss.sum())
 
 
 class Pipeline(object):
@@ -884,7 +885,7 @@ class Datasim(object):
         return self.eval_arr.sum(0)
 
 
-# def __init__(
+# params network: (
 #         self,
 #         inputs,
 #         targets,
@@ -897,18 +898,24 @@ class Datasim(object):
 #         n_classes=1
 # ):
 
-inputs, targets = Pipeline.delimited(RESOURCES["iris_train"],' ', True)
-test_inputs, test_targets = Pipeline.delimited(RESOURCES["iris_test"],' ', True)
-
-
-first = Single_Layer_Network(inputs,targets,test_inputs,test_targets,Cross_Entropy,
+def problem2():
+    regularization = 0 # 0, 1, or 2
+    inputs, targets = Pipeline.delimited(RESOURCES["iris_train"],' ', True)
+    test_inputs, test_targets = Pipeline.delimited(RESOURCES["iris_test"],' ', True)
+    network = Single_Layer_Network(inputs,targets,test_inputs,test_targets,Cross_Entropy,
                              Softmax_Regression,MatMul,n_classes=3)
 
-first.train(0)
+    network.train(regularization)
 
 
+def problem2():
+    regularization = 0  # 0, 1, or 2
+    inputs, targets = Pipeline.delimited(RESOURCES["iris_train"], ' ', True)
+    test_inputs, test_targets = Pipeline.delimited(RESOURCES["iris_test"], ' ', True)
+    network = Single_Layer_Network(inputs, targets, test_inputs, test_targets, Cross_Entropy,
+                                   Softmax_Regression, MatMul, n_classes=3)
 
-
+    network.train(regularization)
 
 # in minitorch, the network is a module class which stores the bias and weights...essentially
 # each layer stores weights / bias....and the weights store the grad..
