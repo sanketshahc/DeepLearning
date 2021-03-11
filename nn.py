@@ -4,13 +4,58 @@ import matplotlib
 import matplotlib.pyplot as plt
 import random
 from math import *
+######
+DEBUG = False
+MAX_LOOPS = 1000
+######
 
-# hyper parameters
-EPOCHS = 10000
-BATCH = 10
-RATE = .005
+# # hyper parameters last prob 3
+# EPOCHS = 25
+# BATCH = 128
+# RATE = .03
+# MOMENTUM = .1
+# RC = .0005
+#
+# hyper parameters last prob 2
+EPOCHS = 1000
+BATCH = 89
+RATE = .1
 MOMENTUM = 0
-RC = .0001
+RC = .0005
+
+# # Testing
+# EPOCHS = 1000
+# BATCH = 89
+# RATE = .01
+# MOMENTUM = 0
+# RC = .0005
+
+
+
+def grad_central_difference(f, *vals, arg=0, epsilon=1e-6, ind=None):
+    x = vals[arg]
+    up = zeros(x.shape)
+    up[ind] = epsilon
+    vals1 = [x if j != arg else x + up for j, x in enumerate(vals)]
+    vals2 = [x if j != arg else x - up for j, x in enumerate(vals)]
+    delta = f(*vals1).sum() - f(*vals2).sum()
+
+    return delta[0] / (2.0 * epsilon)
+
+
+def grad_check(f, *vals):
+    for x in vals:
+        x.requires_grad_(True)
+        x.zero_grad_()
+    random.seed(10)
+    out = f(*vals)
+    out.sum().backward()
+
+    for i, x in enumerate(vals):
+        ind = x._tensor.sample()
+        check = grad_central_difference(f, *vals, arg=i, ind=ind)
+        np.testing.assert_allclose(x.grad[ind], check, 1e-2, 1e-2)
+
 
 RESOURCES = {
     "iris_train": "resources/iris-train.txt",
@@ -145,6 +190,7 @@ class Mean_Squared_Error(Function):
         pass
 
 
+
 class Softmax_Regression(Function):
     """
     input logits of shape:
@@ -162,10 +208,12 @@ class Softmax_Regression(Function):
         """
         assert isinstance(logit,np.ndarray)
         assert isinstance(dim, int), print(type(dim))
-        # print(logit.shape)
-        e = np.exp(logit)
+        print(f'logit:{logit}') if DEBUG else None
+        e = np.exp(logit - np.max(logit))
         e_sum = e.sum(dim)
         e_sum = e_sum.reshape(e_sum.shape[-2],e_sum.shape[-1],1)
+        assert nan not in e_sum, f"NAN alert: {e_sum}"
+        print(f'softmax denom: {e_sum}') if DEBUG else None
         soft = e / e_sum
         return soft
 
@@ -180,6 +228,9 @@ class Softmax_Regression(Function):
 class MatMul(Function):
     @staticmethod
     def forward(a, b):
+        assert nan not in b, f"NAN alert: {b}"
+        print(f'input: {a}') if DEBUG else None
+        print(f'weights: {b}')if DEBUG else None
         return np.matmul(a,b)
 
     @staticmethod
@@ -204,6 +255,7 @@ class Cross_Entropy(Function):
 
         this is the element wise function, it must be averaged over the batch elsewhere
         """
+        print(f'Loss Forward')if DEBUG else None
         assert isinstance(y_hat, np.ndarray)
         assert isinstance(dim, int)
         assert y.shape == y_hat.shape, f"y.shape: {y.shape}, yhat.shape{y_hat.shape}"
@@ -211,6 +263,7 @@ class Cross_Entropy(Function):
             assert issubclass(r_fn, Function)
 
         loss = (y * np.log(y_hat)).sum(dim) * -1
+
 
         def _reg(lam, p, w):
             return loss + r_fn.forward(lam, p, w)
@@ -229,6 +282,7 @@ class Cross_Entropy(Function):
 
         arguments for other loss backwards should be same for other functions, but w/o fn inputs
         """
+        print(f'LOSS BACKWARD')if DEBUG else None
         assert issubclass(y_hat_fn, Function)
         assert issubclass(logit_fn, Function)
         A = logit_fn.backward(x,w)
@@ -259,12 +313,8 @@ class Regularize(Function):
     @staticmethod
     def backward(lam, p, w):
         assert p == 1 or 2
-
-        def sgn(w):
-            return 1 if w > 0 else -1 if w < 0 else 0
-
         if p == 1:
-            return sgn(w)
+            return np.piecewise(w, [w < 0, w > 0,w == 0], [-1, 1, 0])
         if p == 2:
             return lam * w
 
@@ -315,7 +365,8 @@ class Single_Layer_Network(object):
         self.C = n_classes
         feat_w = self.X.shape[-1]
         feat_w = feat_w + 1 if bias == 'embedded' else feat_w # feat width (includes bias)
-        self.W = np.random.rand(feat_d, feat_w, self.C) # inititalizing random weights.
+        self.W = np.random.rand(feat_d, feat_w, self.C) / np.sqrt(feat_d*feat_w*self.C)#
+        # inititalizing random weights.
         # self.bias is embedded in inputs (X) as column of 1s
         self.X_t = test_inputs
         self.Y_t = test_targets
@@ -391,10 +442,11 @@ class Single_Layer_Network(object):
         assert d_loss_sum.shape[-1] == self.W.shape[-1]
         self.velocity = MOMENTUM * self.velocity - RATE * d_loss_sum/BATCH
         self.W = self.W + self.velocity
+        print(f"weight updated:{self.W}") if DEBUG else None
 
     def evaluate(self,mode,epoch,Y,Y_hat):
         """
-        needs to be called per batch per epoch
+        needs to be called per batch per epoch. Builds the accuracy matrix.
         """
         assert mode == "training" or "testing"
         eval_array = self.training_eval_array if mode == "training" else self.testing_eval_array
@@ -408,41 +460,31 @@ class Single_Layer_Network(object):
         '''
         called per epoch
         '''
-        for X, Y in Pipeline.batch_gen(self.X_t, self.Y_t, output=self.C):
-            W = self.W  # should already be shaped for batch, initiated at random
-
-            # per batch shape assertions
-            assert len(X.shape) == 3
-            assert len(Y.shape) == 3
-            assert len(W.shape) == 3
-            assert X.shape[-1] == self.W.shape[-2]
-            assert X.shape[0] == BATCH
-            Y_hat = self.forward()(X, W)  # currying to forward_fn
-            if not p:
-                loss = self.loss_fn.forward(Y, Y_hat)
-            elif p:
-                loss = self.loss_fn.forward(Y, Y_hat, r_fn=self.r_fn)(RC, p, W)
-            self.testing_losses.append(loss.sum())
-            self.evaluate("testing",epoch,Y,Y_hat)
-        print(loss.sum())
-
-        #     todo print a report on log
-
-        # instead just build a 3d array that is epoch x Y x Yhat:
-        # per training:
-        #   track an 'evaluation' array, from which produce total accuracies and confusion matrix
-        #   track total loss, in list form, indices = epoch
-        #   per epoch:
-        #      track loss figure total of epoch
-        #      track total epoch slice of eval array
-        #      per batch:
-        #          calculate total loss or average loss, and add to epoch total
-        #          for each combination of y, yhat (argmax),
-        #               add a count to that index of a y x yhat sized array
-        #          if criteria meets testing checkpoint,
-        #               then also do above for testing data as well,in a separate array/list
-
-
+        batches_complete = 0
+        loops = 0
+        epoch_loss = 0
+        for X, Y in Pipeline.batch_gen(self.X_t, self.Y_t, output=self.C, to_standardize=True):
+            loops += 1
+            if loops < 32: # for randomizing which
+                # test batch is ran each time.
+                batches_complete += 1
+                W = self.W  # should already be shaped for batch, initiated at random
+                # per batch shape assertions
+                assert len(X.shape) == 3
+                assert len(Y.shape) == 3
+                assert len(W.shape) == 3
+                assert X.shape[-1] == self.W.shape[-2]
+                assert X.shape[0] == BATCH
+                Y_hat = self.forward()(X, W)  # currying to forward_fn
+                if not p:
+                    loss = self.loss_fn.forward(Y, Y_hat)
+                elif p:
+                    loss = self.loss_fn.forward(Y, Y_hat, r_fn=self.r_fn)(RC, p, W)
+                epoch_loss += loss.sum()
+                self.evaluate("testing",epoch,Y,Y_hat)
+                print(f'Test Batch: {batches_complete}')
+        print(f'Epoch Test Loss: {epoch_loss}')
+        self.testing_losses.append(epoch_loss)
 
     def train(self, p):
 
@@ -457,11 +499,17 @@ class Single_Layer_Network(object):
             mean per class accuracy (max index vs hot v index)
         derivitave of loss
         """
-
         for epoch in range(EPOCHS):
+            count = 0
+            epoch_loss = 0
+            print(f'epoch:{epoch}')
             # stuff per epoch
-            for X, Y in Pipeline.batch_gen(self.X, self.Y, output=self.C):
-                W = self.W  # should already be shaped for batch, initiated at random
+            for X, Y in Pipeline.batch_gen(self.X, self.Y, output=self.C,to_standardize=True):
+                W = self.W
+                print(f'training batch: {count}')
+                # if DEBUG else None
+                count +=1
+                # should already be shaped for batch, initiated at random
                 # per batch shape assertions
                 assert len(X.shape) == 3
                 assert len(Y.shape) == 3
@@ -473,7 +521,8 @@ class Single_Layer_Network(object):
                     loss = self.loss_fn.forward(Y, Y_hat)
                 elif p:
                     loss = self.loss_fn.forward(Y, Y_hat, r_fn=self.r_fn)(RC, p, W)
-                self.training_losses.append(loss.sum())
+
+                epoch_loss += loss.sum()
 
                 #########
                 # ATTN: will have to hardcode for each network type :(
@@ -485,7 +534,7 @@ class Single_Layer_Network(object):
                         W,
                         self.output_fn,
                         self.logit_fn,
-                        )
+                    )
                 elif p:
                     d_loss = self.loss_fn.backward(
                         Y,
@@ -496,10 +545,14 @@ class Single_Layer_Network(object):
                         self.r_fn)(RC, p, W)
                 #####
                 # << outputs dl/dw
+
                 self.update(d_loss)
                 self.evaluate("training",epoch,Y,Y_hat)
+                if count > MAX_LOOPS:  # for testing.
+                    break
+            print(f'Epoch Training Loss: {epoch_loss}')
             self.testing(epoch,p)
-            # print(loss.sum())
+            self.training_losses.append(epoch_loss)
 
 
 class Pipeline(object):
@@ -586,7 +639,7 @@ class Pipeline(object):
         Y = batch[b'labels']
         Y = Y if mode == "regression" else hot_helper(Y)
         X = batch[b'data']
-        return X, Y, cifar_labels
+        return np.array(X,dtype=np.float32), np.array(Y,dtype=np.float32), cifar_labels
 
     @staticmethod
     def batch_gen(X, Y, output=1, feat_h=1, feat_d=1, add_bias=True, to_standardize=True):
@@ -608,6 +661,7 @@ class Pipeline(object):
         assert isinstance(X, np.ndarray)
         assert isinstance(Y, np.ndarray)
         assert Y.shape[0] == X.shape[0]
+        assert Y.shape
 
         # slice / reshape X,Y to fit batch size...
         classes = Y.shape[-1]  # how many different classes?
@@ -628,7 +682,7 @@ class Pipeline(object):
             batch_x = np.concatenate((  # adding bias column.
                 batch_x, batch_bias
             ), axis=-1)
-            assert batch_x[:, -1].all() == 1
+            assert batch_x[..., -1].all() == 1
             batch_y = batched_Y[b, ...]
             yield (batch_x, batch_y)
             # should be iterated on in trainer, as a generator.
@@ -651,37 +705,24 @@ class Pipeline(object):
         """
         if mode == 'all':
             X = 2 * (X - X.min()) / (X.max() - X.min()) - 1
-            assert X[:, -1].all() == 1
             assert X.max() == 1 and X.min() == -1
             return X
         elif mode == 'feature':
-            # fixed_dims = len(X.shape) - 1
             for f in range(X.shape[-1]):
-                # i = (slice(None),) * fixed_dims + (f,)  # sliceNone == ':'
                 i = (..., f)
-                mX = X[i].max()
-                nX = X[i].min()
-                X[i] = (2
-                        * (X[i] - nX)
-                        / (mX - nX)
-                        - 1)
+                mX, nX = X[i].max(), X[i].min()
+                X[i] = 2 * (X[i] - nX) / (mX - nX) - 1
                 mX = float(X[i].max())
                 nX = float(X[i].min())
-                # assert np.testing.assert_almost_equal(X[i].mean(), 0, decimal=6)
-                # any assertions about mean here?
                 # print(nX, mX)
-                np.testing.assert_almost_equal(1.0, mX, decimal=1), \
-                f"Max not 1.0, but {mX}"
-                np.testing.assert_almost_equal(-1.0, nX, decimal=1), \
-                f"Min not -1.0, but {nX}"
-            assert X[:, -1].all() == 1
+                np.testing.assert_almost_equal(mX,1.0, decimal=1,err_msg=f"Max not 1.0, but {mX}")
+                np.testing.assert_almost_equal(nX,-1.0, decimal=1,err_msg=f"Min not -1.0, but {nX}")
             return X
         elif mode == 'z_feature':
             for f in range(X.shape[-1]):
                 i = (..., f)
                 X[i] = (X[i] - X[i].mean()) / X[i].std()
-                assert np.testing.assert_almost_equal(X[i].mean(), 0, decimal=7)
-            assert X[:, -1].all() == 1
+                np.testing.assert_almost_equal(X[i].mean(), 0, decimal=7)
             return X
         else:
             raise ValueError("Choose mode from all, feature, or z_feature")
@@ -805,18 +846,19 @@ class Datasim(object):
         self.eval_arr = (randarr.reshape(epoch_count, label_count, label_count)
                          + np.diag([random.randint(0, 10)] * label_count))
 
-    def accuracy_list(self):
+    @staticmethod
+    def accuracy_list(eval_arr):
         """
         takes the eval array,  outputs list in a list. For concatenatino purposes and the curves
         graph..
         """
         accuracies = []
-        for i in range(self.eval_arr.shape[0]):
-            x = self.eval_arr[i, :, :]
+        for i in range(eval_arr.shape[0]):
+            x = eval_arr[i, :, :]
             assert x.shape == (
-                self.eval_arr.shape[-2], self.eval_arr.shape[-1]), f'shape is {x.shape}'
+                eval_arr.shape[-2], eval_arr.shape[-1]), f'shape is {x.shape}'
             _x = x.sum(1)
-            assert _x.shape == (self.eval_arr.shape[-1],), f'shape is {_x.shape}'
+            assert _x.shape == (eval_arr.shape[-1],), f'shape is {_x.shape}'
             _sum_acc = 0
             for j in range(x.shape[0]):
                 accuracy = x[j][j] / _x[j]
@@ -898,26 +940,35 @@ class Datasim(object):
 #         n_classes=1
 # ):
 
-def problem2():
-    regularization = 0 # 0, 1, or 2
+## TURN to_standarize flag to TRUE; adjust Batch_gen arguments appropriately:
+# self.X_t, self.Y_t, output=self.C,to_standardize=True
+# self.X, self.Y, output=self.C,to_standardize=True
+def problem2(regularization_level):
+    reg = regularization_level
     inputs, targets = Pipeline.delimited(RESOURCES["iris_train"],' ', True)
     test_inputs, test_targets = Pipeline.delimited(RESOURCES["iris_test"],' ', True)
     network = Single_Layer_Network(inputs,targets,test_inputs,test_targets,Cross_Entropy,
                              Softmax_Regression,MatMul,n_classes=3)
+    network.train(reg)
+    return network
 
-    network.train(regularization)
-
-
-def problem2():
-    regularization = 0  # 0, 1, or 2
-    inputs, targets = Pipeline.delimited(RESOURCES["iris_train"], ' ', True)
-    test_inputs, test_targets = Pipeline.delimited(RESOURCES["iris_test"], ' ', True)
+## TURN to_standarize flag to FALSE
+def problem3(regularization_level):
+    reg = regularization_level
+    inputs, targets, dict = Pipeline.cifar(RESOURCES["cifar_train"])
+    test_inputs, test_targets, _dict = Pipeline.cifar(RESOURCES["cifar_test"])
     network = Single_Layer_Network(inputs, targets, test_inputs, test_targets, Cross_Entropy,
-                                   Softmax_Regression, MatMul, n_classes=3)
+                                   Softmax_Regression, MatMul, n_classes=10)
 
-    network.train(regularization)
+    network.train(reg)
+    return network
 
-# in minitorch, the network is a module class which stores the bias and weights...essentially
+NN2 = problem2(0)
+
+# NN3 = problem3(1)
+
+# X, Y = Datasim.data_2d(200)
+# initorch, the network is a module class which stores the bias and weights...essentially
 # each layer stores weights / bias....and the weights store the grad..
 #
 #
