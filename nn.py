@@ -285,9 +285,13 @@ class Cross_Entropy(Function):
         print(f'LOSS BACKWARD')if DEBUG else None
         assert issubclass(y_hat_fn, Function)
         assert issubclass(logit_fn, Function)
-        A = logit_fn.backward(x,w)
-        B = (y_hat_fn.forward(logit_fn.forward(x,w)) - y)
-        d_loss = logit_fn.forward(A,B)
+        # logit_fn is just matmul here
+        A = logit_fn.backward(x,w) # MatMul Backwards, just X.transpose
+
+        B = (y_hat_fn.forward(logit_fn.forward(x,w)) - y) # the deriv of loss wrt softmax output
+
+        d_loss = logit_fn.forward(A,B) # matmulling again by the transpose of X, essentially....
+
         #chain ruling for dl/dw
         assert d_loss.shape == (BATCH,w.shape[-2],w.shape[-1]), \
             f"ooops check loss deriv, it's {d_loss.shape}"

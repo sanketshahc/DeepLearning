@@ -346,9 +346,11 @@ class Cross_Entropy_Test(Function):  # None REgularlized
 
         soft = SMAXtest(X,W)
         assert soft.shape == y.shape
-        d_loss = soft - y
-        dl_dw = d_loss * X.transpose(0,2,1)
-        return dl_dw
+        dj_do = soft - y
+        print('x' ,X.shape)
+        print(dj_do.shape)
+        dj_dw = - X.transpose(0,2,1) @ (y - soft)
+        return dj_dw
 
 
 class Regularize(Function):
