@@ -1013,8 +1013,8 @@ def problem3(regularization_level):
     return network
 
 
-NN2 = problem2(0)
-
+# NN2 = problem2(0)
+inputs, targets, dict = Pipeline.cifar(RESOURCES["cifar_train"])
 # NN3 = problem3(1)
 
 # X, Y = Datasim.data_2d(200)

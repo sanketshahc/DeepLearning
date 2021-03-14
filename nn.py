@@ -18,10 +18,10 @@ MAX_LOOPS = 1000
 #
 # hyper parameters last prob 2
 EPOCHS = 1000
-BATCH = 89
-RATE = .1
-MOMENTUM = 0
-RC = .0005
+BATCH = 24
+RATE = .03
+MOMENTUM = .07
+RC = .001
 
 # # Testing
 # EPOCHS = 1000
@@ -287,7 +287,8 @@ class Cross_Entropy(Function):
         assert issubclass(logit_fn, Function)
 
         ### Essentially:
-        # dJ/dW = X_transpose @ Soft(X @ W) - Y
+
+        # dJ/dW = X_transpose @ (Soft(X @ W) - Y)
         A = logit_fn.backward(x,w) # MatMul Backwards, just X.transpose
         B = (y_hat_fn.forward(logit_fn.forward(x,w)) - y) # the deriv of loss wrt softmax output
         d_loss = logit_fn.forward(A,B) # matmulling again by the transpose of X, essentially....
@@ -402,7 +403,7 @@ class Single_Layer_Network(object):
         # not actually different weights obj per batch, but just helpful to think in that way in
         # terms of shape
         # if dtype == 'output':
-        #     shape(batches, feat_d, feat_h, output)
+        #     shape(batches, batch_size, feat_h, output)
 
         # TYPE ASSERTIONS
         assert isinstance(self.X, np.ndarray)
@@ -665,28 +666,32 @@ class Pipeline(object):
         assert isinstance(X, np.ndarray)
         assert isinstance(Y, np.ndarray)
         assert Y.shape[0] == X.shape[0]
-        assert Y.shape
-
         # slice / reshape X,Y to fit batch size...
+        batch_size = BATCH
         classes = Y.shape[-1]  # how many different classes?
         feat_w = X.shape[-1]  # number feat_w
-        batch_size = BATCH
+        N = X.shape[0]
         batches = X.shape[0] // batch_size  # number batches
         ex = batches * batch_size  # new number of examples
         sliced_X = X[0:ex, ...]  # using ellipses!
         sliced_Y = Y[0:ex, ...]
-        batched_X = sliced_X.reshape(batches, batch_size, feat_h, feat_w)
-        batched_Y = sliced_Y.reshape(batches, batch_size, feat_h, classes)
+        # GENERALIZING INTO TENSORS FOR MULTIDIMENSIONAL FEATURES:
+        sliced_tensor_X = sliced_X.reshape(1, 1, ex, feat_w)
+        sliced_tensor_Y = sliced_Y.reshape(1, 1, ex, classes)
+        sliced_tensor_X = sliced_tensor_X.transpose(0, 2, 1, 3)
+        bsliced_tensor_Y = sliced_tensor_Y.transpose(0, 2, 1, 3)
+        batched_X = sliced_tensor_X.reshape(batches, batch_size, feat_h, feat_w)
+        batched_Y = sliced_tensor_Y.reshape(batches, batch_size, feat_h, classes)
         batch_bias = np.ones((batch_size, feat_h, 1))
         for b in range(batches):
             # i = (slice(None),) * fixed_dims + (b,)
             batch_x = batched_X[b, ...]
-            batch_x = Pipeline.standardize(batch_x, mode='feature') if to_standardize else batch_x
+            batch_x = Pipeline.standardize(batch_x, mode='z_feature') if to_standardize else batch_x
             # print(batch_x.shape, batch_bias.shape)
             batch_x = np.concatenate((  # adding bias column.
                 batch_x, batch_bias
             ), axis=-1)
-            assert batch_x[..., -1].all() == 1
+            np.testing.assert_allclose(batch_x[..., -1],1.0,err_msg= "Bias Concatenation Failure")
             batch_y = batched_Y[b, ...]
             yield (batch_x, batch_y)
             # should be iterated on in trainer, as a generator.
@@ -753,7 +758,8 @@ class Plot(object):
     def curves(independent, *dependent, ind_label, dep_label, title):
         """
         everything after unpacker must be kewword arguements!
-        must call with unpacker if tupling....
+        must call with unpacker * if inputing a tuple for dependenate
+        ..
         single independent variable, multiple dependent allowed
         labels/title are strings
 
@@ -764,8 +770,11 @@ class Plot(object):
         assert iter(independent)
         assert iter(dependent)
         fig, ax1 = plt.subplots(1, 1, sharex=True, sharey=True)
-        ax1.plot(independent, dependent[0], color="red", label="Training")
-        ax1.plot(independent, dependent[1], color="blue", label="Test")
+        fig.dpi = 240
+        c=random.random
+        labels = ["Training", "Testing"]
+        for each in dependent:
+            ax1.plot(independent, each['data'], color=(c(), c(), c()), label=each['label'])
         ax1.set(xlabel=ind_label, ylabel=dep_label, title=title)
         plt.legend(loc="lower right", frameon=False)
         plt.show()
@@ -792,6 +801,7 @@ class Plot(object):
         X_space = np.c_[xx1.ravel(), xx2.ravel()]  # listed coordinates for feeding.
         h = fn(X_space)  # will be the model forward function
         h = h.reshape(xx1.shape)  # reshaping to align with xx, yy length...kind of dumb tbh.
+        plt.figure(dpi=240)
         plt.contourf(xx1, xx2, h)
         plt.scatter(X[:, 0], X[:, 1],
                     c=Y, edgecolor='k')  # unclear if s param needed...
@@ -851,25 +861,32 @@ class Datasim(object):
                          + np.diag([random.randint(0, 10)] * label_count))
 
     @staticmethod
-    def accuracy_list(eval_arr):
+    def accuracy_list(eval_arr,label):
         """
         takes the eval array,  outputs list in a list. For concatenatino purposes and the curves
         graph..
+        title is a string
         """
         accuracies = []
         for i in range(eval_arr.shape[0]):
             x = eval_arr[i, :, :]
             assert x.shape == (
                 eval_arr.shape[-2], eval_arr.shape[-1]), f'shape is {x.shape}'
+            # print(eval_arr.shape[-2], eval_arr.shape[-1])
             _x = x.sum(1)
             assert _x.shape == (eval_arr.shape[-1],), f'shape is {_x.shape}'
             _sum_acc = 0
             for j in range(x.shape[0]):
-                accuracy = x[j][j] / _x[j]
+                if _x[j]:
+                    accuracy = x[j,j] / _x[j]
+                else:
+                    continue
                 _sum_acc += accuracy
             mean_acc = _sum_acc / x.shape[0]
+            assert mean_acc is not nan
+            # print(mean_acc, _x, x.shape[0] )
             accuracies.append(mean_acc)
-        return accuracies
+        return {"data":accuracies,"label":label}
 
     def loss_list(self):
         pass
@@ -967,7 +984,12 @@ def problem3(regularization_level):
     network.train(reg)
     return network
 
-NN2 = problem2(0)
+NN2 = problem2(2)
+
+# Plot.curves(range(EPOCHS),*(Datasim.accuracy_list(NN2.training_eval_array,"Training"),
+#                             Datasim.accuracy_list(
+#     NN2.testing_eval_array,"Testing")),ind_label='Epochs',
+#             dep_label="accuracy",title="Accuracy for Test and Training Data")
 
 # NN3 = problem3(1)
 
