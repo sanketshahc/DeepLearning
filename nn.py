@@ -9,19 +9,26 @@ DEBUG = False
 MAX_LOOPS = 1000
 ######
 
-# # hyper parameters last prob 3
+# # hyper parameters last prob 3...nn8
 # EPOCHS = 25
 # BATCH = 128
 # RATE = .03
 # MOMENTUM = .1
 # RC = .0005
-#
-# hyper parameters last prob 2
-EPOCHS = 1000
-BATCH = 24
-RATE = .03
-MOMENTUM = .07
-RC = .001
+
+# hyper parameters last prob 3...nn9
+EPOCHS = 25
+BATCH = 256
+RATE = .075
+MOMENTUM = .075
+RC = .0005
+
+# # hyper parameters last prob 2
+# EPOCHS = 1000
+# BATCH = 24
+# RATE = .03
+# MOMENTUM = .07
+# RC = .001
 
 # # Testing
 # EPOCHS = 1000
@@ -29,32 +36,6 @@ RC = .001
 # RATE = .01
 # MOMENTUM = 0
 # RC = .0005
-
-
-
-def grad_central_difference(f, *vals, arg=0, epsilon=1e-6, ind=None):
-    x = vals[arg]
-    up = zeros(x.shape)
-    up[ind] = epsilon
-    vals1 = [x if j != arg else x + up for j, x in enumerate(vals)]
-    vals2 = [x if j != arg else x - up for j, x in enumerate(vals)]
-    delta = f(*vals1).sum() - f(*vals2).sum()
-
-    return delta[0] / (2.0 * epsilon)
-
-
-def grad_check(f, *vals):
-    for x in vals:
-        x.requires_grad_(True)
-        x.zero_grad_()
-    random.seed(10)
-    out = f(*vals)
-    out.sum().backward()
-
-    for i, x in enumerate(vals):
-        ind = x._tensor.sample()
-        check = grad_central_difference(f, *vals, arg=i, ind=ind)
-        np.testing.assert_allclose(x.grad[ind], check, 1e-2, 1e-2)
 
 
 RESOURCES = {
@@ -136,6 +117,126 @@ class Function(object):
         ## apply forward....save outputs?
 
 
+class Poisson_Regression(Function):
+    """
+    Log-Linear (generalized linear function)...not totally sure what that means.
+    """
+    @staticmethod
+    def forward(logit,min_year, dim = -1):
+        y_hat = exp(logit) # + min_year ???
+        return y_hat
+
+    @staticmethod
+    def backward(self, *args):
+        pass
+
+
+class Poisson_Loss(Function):
+    @staticmethod
+    def forward(y, y_hat, dim=-1, r_fn=None):
+        print(f'Loss Forward')if DEBUG else None
+        assert isinstance(y_hat, np.ndarray)
+        assert isinstance(dim, int)
+        assert isinstance(y[0], int)
+        assert y.shape == y_hat.shape, f"y.shape: {y.shape}, yhat.shape{y_hat.shape}"
+        if r_fn:
+            assert issubclass(r_fn, Function)
+
+        loss = (exp(y_hat) - y * y_hat)
+        assert len(loss.shape) == 1
+        loss = loss.sum(dim) # may be redundant
+        assert loss.shape[0] == 1
+        def _reg(lam, p, w):
+            return loss + r_fn.forward(lam, p, w)
+
+        return _reg if r_fn else loss
+        # currently out put is shape [1,]
+
+    @staticmethod
+    def backward(y, x, w, y_hat_fn, logit_fn, r_fn=None):
+        print(f'LOSS BACKWARD') if DEBUG else None
+        assert issubclass(y_hat_fn, Function)
+        assert issubclass(logit_fn, Function)
+        assert len(w.shape) == 1, print(w.shape) # could be a x,1...ok
+
+        ### Essentially:
+
+        # dJ/dW = X_transpose @ (exp(X @ w) - Y)
+        A = logit_fn.backward(x, w)[0]  # MatMul Backwards, just X.transpose
+        B = (y_hat_fn.forward(logit_fn.forward(x, w)) - y)  # the deriv of loss wrt poisson output
+        d_loss = logit_fn.forward(A, B)  # matmulling again by the transpose of X, essentially....
+        # chain ruling for dl/dw
+        assert d_loss.shape == w.shape, f"ooops check loss deriv, it's {d_loss.shape}"
+
+        def _reg(lam, p, w):
+            return d_loss + r_fn.backward(lam, p, w)
+
+        return _reg if r_fn else d_loss
+
+
+# Necessary? Can't just use Matmul?
+class Ridge_Regression(Function):
+    @staticmethod
+    def forward(self, *args):
+        pass # see MatMul
+    @staticmethod
+    def backward(self, *args):
+        pass  # see MatMul
+
+
+class Mean_Squared_Error(Function):
+    @staticmethod
+    def forward(y, y_hat, dim=-1, r_fn=None):
+        """
+        """
+        print(f'Loss Forward') if DEBUG else None
+        assert isinstance(y_hat, np.ndarray)
+        assert isinstance(dim, int)
+        assert y.shape == y_hat.shape, f"y.shape: {y.shape}, yhat.shape{y_hat.shape}"
+        if r_fn:
+            assert issubclass(r_fn, Function)
+        y_hat = np.round(y_hat,decimal=0) #also can use func below....
+        loss = (y_hat -y)**2
+        assert len(loss.shape) == 1
+        loss = loss.mean(loss, axis=0)
+        assert loss.shape[0] == 1
+
+        def _reg(lam, p, w):
+            return loss + r_fn.forward(lam, p, w)
+
+        return _reg if r_fn else loss
+
+        # def round_helper(y):
+        #     """
+        #     round array input and return.
+        #     """
+        #     lower = y//1
+        #     upper = -1 * (y // -1)
+        #     return lower if (y-lower) < (upper-y) else upper
+
+    @staticmethod
+    def backward(y, x, w, y_hat_fn, logit_fn, r_fn=None):
+        print(f'LOSS BACKWARD') if DEBUG else None
+        assert issubclass(y_hat_fn, Function)
+        assert issubclass(logit_fn, Function)
+        assert len(w.shape) == 1, print(w.shape) # could be a x,1...ok
+        assert len(y.shape[0]) == 1
+        ### Essentially:
+        # dJ/dW = X_transpose @ (exp(X @ w) - Y)
+        A = logit_fn.backward(x, w)[0]  # MatMul Backwards, just X.transpose
+        B = (y_hat_fn.forward(logit_fn.forward(x, w)) - y)  # the deriv of loss wrt poisson output
+        d_loss = (2 / y.shape[0]) * logit_fn.forward(A, B)  # matmulling again by the transpose of
+        # X,
+                  # essentially....
+        # chain ruling for dl/dw
+        assert d_loss.shape == w.shape, f"ooops check loss deriv, it's {d_loss.shape}"
+
+        def _reg(lam, p, w):
+            return d_loss + r_fn.backward(lam, p, w)
+
+        return _reg if r_fn else d_loss
+
+
 class Tikhonov(Function):
     @staticmethod
     def forward(logit, dim):
@@ -147,50 +248,7 @@ class Tikhonov(Function):
         """
 
 
-class Ridge_Regression(Function):
-    def forward(self, *args):
-        pass
-
-    def backward(self, *args):
-        pass
-
-
-class Poisson_Regression(Function):
-    """
-    Log-Linear (generalized linear function)...not totally sure what that means.
-    """
-
-    def forward(self, *args):
-        pass
-
-    def backward(self, *args):
-        pass
-
-
-class Poisson_Loss(Function):
-    def forward(self, *args):
-        pass
-
-    def backward(self, *args):
-        pass
-
-
-class Mean_Squared_Error(Function):
-    def forward(self, *args):
-        """
-        """
-        def round_helper(Y):
-            """
-            round array input and return.
-            """
-            pass
-        pass
-
-    def backward(self, *args):
-        pass
-
-
-
+# Our only separated "Logit" Function, or Activation Function.
 class Softmax_Regression(Function):
     """
     input logits of shape:
@@ -224,7 +282,7 @@ class Softmax_Regression(Function):
         """
         pass
 
-
+# Ridge Regression
 class MatMul(Function):
     @staticmethod
     def forward(a, b):
@@ -236,12 +294,14 @@ class MatMul(Function):
     @staticmethod
     def backward(a, b):
         """
-        not generalized! assuming ab or XW ordering, dy/dw
-
+        assuming ab or XW ordering, dy/dw
         multiply by outer in the actual outer function.
         """
         assert len(a.shape) == 3, f"ashape: {a.shape}"
-        return a.transpose(0,2,1)
+        return a.transpose(0,2,1),b.transpose(0,2,1)
+        # at = dw if XW, ignore b
+        # bt = dw if WX, ignore a
+
 
 
 class Cross_Entropy(Function):
@@ -263,7 +323,8 @@ class Cross_Entropy(Function):
             assert issubclass(r_fn, Function)
 
         loss = (y * np.log(y_hat)).sum(dim) * -1
-
+        #summed over classes
+        #sum over batch as well? all other loss functions return scalar
 
         def _reg(lam, p, w):
             return loss + r_fn.forward(lam, p, w)
@@ -289,7 +350,7 @@ class Cross_Entropy(Function):
         ### Essentially:
 
         # dJ/dW = X_transpose @ (Soft(X @ W) - Y)
-        A = logit_fn.backward(x,w) # MatMul Backwards, just X.transpose
+        A = logit_fn.backward(x,w)[0] # MatMul Backwards, just X.transpose
         B = (y_hat_fn.forward(logit_fn.forward(x,w)) - y) # the deriv of loss wrt softmax output
         d_loss = logit_fn.forward(A,B) # matmulling again by the transpose of X, essentially....
 
@@ -306,6 +367,7 @@ class Regularize(Function):
     @staticmethod
     def forward(lam, p, w):
         """
+        Note that This returns the full expressions (lam/p)||W||^p
         p is the degree of norm...ie 1 or 2 or
         can only be 1 or 2 for now.
         lam is regularization constant
@@ -346,7 +408,7 @@ class Single_Layer_Network(object):
             test_targets,
             loss_fn,
             output_fn,
-            logit_fn,
+            activation_fn = None,#if different from output
             feat_d=1,
             n_classes=1,
             bias = 'embedded'
@@ -356,12 +418,12 @@ class Single_Layer_Network(object):
         classes are number of classes, 1 for regression
         forward is the forward function being called....can be lambda if combining, or just the
         loss fn is the loss function CLASS
-        logit fn is the logit_fn for
+        logit/activatoin fn is the activation fn if seperate from the output
         """
         # FUNCTIONAL ARGS:
         self.r_fn = Regularize
         self.loss_fn = loss_fn
-        self.logit_fn = logit_fn # sometimes same as output
+        self.activation_fn = activation_fn # sometimes same as output
         self.output_fn = output_fn # only different in case of softmax regression
 
         # DATA AND DIMENSIONAL ARGS:
@@ -410,16 +472,15 @@ class Single_Layer_Network(object):
         assert isinstance(self.W, np.ndarray)
         # assert isinstance(self.C, np.ndarray)
         assert isinstance(self.Y, np.ndarray)
-        assert issubclass(self.logit_fn, Function)
+        assert issubclass(self.activation_fn, Function)
         assert issubclass(self.output_fn, Function)
         assert issubclass(self.loss_fn, Function)
 
     def forward(self):  # argument must be curried
         if self.output_fn == Softmax_Regression:
-            ret = lambda x,w: self.output_fn.forward(self.logit_fn.forward(x,w))
+            ret = lambda x,w: self.output_fn.forward(self.activation_fn.forward(x, w))
         else:
             ret = lambda x,w: self.output_fn.forward(x,w)
-
         return ret
 
     # def loss(self): # argument must be curried
@@ -538,7 +599,7 @@ class Single_Layer_Network(object):
                         X,
                         W,
                         self.output_fn,
-                        self.logit_fn,
+                        self.activation_fn,
                     )
                 elif p:
                     d_loss = self.loss_fn.backward(
@@ -546,7 +607,7 @@ class Single_Layer_Network(object):
                         X,
                         W,
                         self.output_fn,
-                        self.logit_fn,
+                        self.activation_fn,
                         self.r_fn)(RC, p, W)
                 #####
                 # << outputs dl/dw
@@ -572,12 +633,13 @@ class Pipeline(object):
     '''
 
     @staticmethod
-    def delimited(path, delim, randomize=False, mode="classification"):
+    def delimited(path, delim, randomize=False, mode="classification", interval=None):
         """
         takes text file, reads line by line, and outputs array of inputs, outputs, and hot-vector
         outputs
         delim must be string...iris is space, msd is comma....
-        range is the closed set of rows from which to take examples...ie [0,10]. use 0-start indexes, not numbers
+        interval is the closed set of rows from which to take examples...ie [0,10]. use 0-start
+        indexes, not numbers
         None will be return
         full range.
         if randomize, have randomize function...
@@ -588,11 +650,10 @@ class Pipeline(object):
         """
         # assert correct file types
         X, Y = [], []
-        interval = None
         (path, interval) = (path[0], path[1]) if type(path) == tuple else (path, interval)
         lines = open(path).readlines()
         line_generator = enumerate((line for line in lines))
-        if interval:  # for specific line intervals.
+        if interval:  # for specific line intervals. this bit is for -indices (from end)
             interval[0] = interval[0] + len(lines) if interval[0] < 0 else interval[0]
             interval[1] = interval[1] + len(lines) if interval[1] < 0 else interval[1]
         for l, line in line_generator:
@@ -679,7 +740,7 @@ class Pipeline(object):
         sliced_tensor_X = sliced_X.reshape(1, 1, ex, feat_w)
         sliced_tensor_Y = sliced_Y.reshape(1, 1, ex, classes)
         sliced_tensor_X = sliced_tensor_X.transpose(0, 2, 1, 3)
-        bsliced_tensor_Y = sliced_tensor_Y.transpose(0, 2, 1, 3)
+        sliced_tensor_Y = sliced_tensor_Y.transpose(0, 2, 1, 3)
         batched_X = sliced_tensor_X.reshape(batches, batch_size, feat_h, feat_w)
         batched_Y = sliced_tensor_Y.reshape(batches, batch_size, feat_h, classes)
         batch_bias = np.ones((batch_size, feat_h, 1))
@@ -984,8 +1045,8 @@ def problem3(regularization_level):
     network.train(reg)
     return network
 
-NN2 = problem2(2)
-
+# NN2 = problem2(2)
+NN3 = problem3(0)
 # Plot.curves(range(EPOCHS),*(Datasim.accuracy_list(NN2.training_eval_array,"Training"),
 #                             Datasim.accuracy_list(
 #     NN2.testing_eval_array,"Testing")),ind_label='Epochs',
